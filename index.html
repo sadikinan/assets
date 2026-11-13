@@ -285,22 +285,64 @@ async function poolPrice() {
   return Number(ethers.formatUnits(out, 18)) / 0.1;
 }
 
+// Cüzdan sağlayıcısını bul: window.ethereum, Trust'ın kendi nesnesi veya EIP-6963 duyurusu
+let eip6963 = [];
+window.addEventListener("eip6963:announceProvider", e => eip6963.push(e.detail));
+function findWallet() {
+  const tw = window.trustwallet?.ethereum || (window.trustwallet?.request ? window.trustwallet : null);
+  const e = window.ethereum;
+  const multi = e?.providers?.find?.(p => p.isTrust || p.isTrustWallet) || null;
+  const ann = (eip6963.find(d => /trust/i.test(d.info?.name || "")) || eip6963[0])?.provider || null;
+  return tw || multi || e || ann || null;
+}
+async function waitWallet(ms = 3000) {
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+  const t0 = Date.now();
+  while (!findWallet() && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 150));
+  return findWallet();
+}
+function trustLink() { return "https://link.trustwallet.com/open_url?coin_id=20000714&url=" + encodeURIComponent(location.href); }
+let W = null;
 async function connect() {
-  if (!window.ethereum) { alertBox("Cüzdan bulunamadı. Bu sayfayı Trust Wallet veya MetaMask uygulamasının içindeki tarayıcıdan açın."); return; }
+  W = await waitWallet();
+  if (!W) {
+    $("walletInfo").innerHTML = `Bu tarayıcıda cüzdan yok (Safari/Chrome olabilir). <a href="${trustLink()}" style="color:#4da3ff;font-weight:700">Trust Wallet içinde aç</a> bağlantısına basın, ya da Trust → Keşfet → adres çubuğuna bu sayfanın adresini yazın.`;
+    log("Cüzdan bulunamadı (sayfa cüzdan tarayıcısında değil)");
+    return;
+  }
   try {
-    await window.ethereum.request({ method: "eth_requestAccounts" });
-    const cid = await window.ethereum.request({ method: "eth_chainId" });
-    if (cid !== "0x38") await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
-    browserProv = new ethers.BrowserProvider(window.ethereum, "any");
-    signer = await browserProv.getSigner();
+    $("connectBtn").textContent = "Cüzdan onayı bekleniyor…";
+    let accs = [];
+    try { accs = await W.request({ method: "eth_requestAccounts" }); }
+    catch (e) { if (e.code === 4001) throw new Error("Bağlantı isteğini reddettiniz"); accs = await W.request({ method: "eth_accounts" }); }
+    if (!accs || !accs.length) throw new Error("Cüzdan hesap vermedi. Trust'ta sağ üstten BNB Smart Chain cüzdanını seçip tekrar deneyin");
+    let cid = String(await W.request({ method: "eth_chainId" }));
+    if (cid !== "0x38" && cid !== "56") {
+      try { await W.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] }); }
+      catch (e) {
+        if (e.code === 4902 || /unrecognized|not added|unknown chain/i.test(e.message || "")) {
+          await W.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x38", chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 }, rpcUrls: [PUBLIC_RPC], blockExplorerUrls: ["https://bscscan.com"] }] });
+        } else throw new Error("Ağ BNB Smart Chain'e geçirilemedi. Trust'ta sayfanın üstündeki ağ simgesinden 'Smart Chain' seçin");
+      }
+    }
+    browserProv = new ethers.BrowserProvider(W, "any");
+    const net = await browserProv.getNetwork();
+    if (net.chainId !== 56n) throw new Error("Cüzdan hâlâ başka ağda (chainId " + net.chainId + "). Trust'ta ağ olarak Smart Chain seçin");
+    signer = await browserProv.getSigner(accs[0]);
     account = await signer.getAddress();
     $("netPill").textContent = "BSC bağlı";
     $("connectBtn").textContent = "Bağlı ✓";
+    $("walletInfo").textContent = "Bağlandı. Her işlemi cüzdanınız ayrıca onayınıza sunar.";
     log("Cüzdan bağlandı " + account.slice(0, 6) + "…" + account.slice(-4));
-    window.ethereum.on?.("accountsChanged", () => location.reload());
-    window.ethereum.on?.("chainChanged", () => location.reload());
+    W.on?.("accountsChanged", () => location.reload());
+    W.on?.("chainChanged", () => location.reload());
     await refresh();
-  } catch (e) { log("Bağlantı hatası: " + (e.shortMessage || e.message)); }
+  } catch (e) {
+    const m = e.shortMessage || e.message || String(e);
+    $("connectBtn").textContent = "Cüzdanı bağla";
+    $("walletInfo").textContent = "Bağlanamadı: " + m;
+    log("Bağlantı hatası: " + m);
+  }
 }
 function alertBox(m) { $("walletInfo").textContent = m; log(m); }
 
@@ -632,7 +674,8 @@ async function doSell() {
 
 $("connectBtn").onclick = connect;
 $("refreshBtn").onclick = refresh;
-if (window.ethereum && window.ethereum.selectedAddress) connect(); else refresh();
+refresh();
+waitWallet(2000).then(w => { if (w && (w.selectedAddress || w.address)) connect(); else if (!w) $("walletInfo").innerHTML = `Cüzdan algılanmadı. Safari/Chrome'daysanız <a href="${trustLink()}" style="color:#4da3ff;font-weight:700">Trust Wallet içinde aç</a>.`; });
 setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 5 * 60 * 1000);
 </script>
 </body>
