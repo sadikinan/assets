@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1>BNB Trend <small style="font-size:12px;opacity:.6">v5.2</small> <span class="pill" id="netPill">bağlı değil</span></h1>
+<h1>BNB Trend <small style="font-size:12px;opacity:.6">v5.3</small> <span class="pill" id="netPill">bağlı değil</span></h1>
 
 <div class="card" id="sigCard">
   <h2>Bugünkü öneri</h2>
@@ -322,23 +322,37 @@ async function connect() {
   }
   try {
     $("connectBtn").textContent = "Cüzdan onayı bekleniyor…";
-    let accs = [];
-    try { accs = await withTimeout(W.request({ method: "eth_requestAccounts" }), 30000, "Cüzdan 30 saniyede cevap vermedi. Trust'ta sağ üstteki ağ simgesinden Smart Chain seçip sayfayı yenileyin"); }
-    catch (e) { if (e.code === 4001) throw new Error("Bağlantı isteğini reddettiniz"); accs = await W.request({ method: "eth_accounts" }); }
-    if (!accs || !accs.length) throw new Error("Cüzdan hesap vermedi. Trust'ta sağ üstten BNB Smart Chain cüzdanını seçip tekrar deneyin");
-    let cid = String(await W.request({ method: "eth_chainId" }));
-    if (cid !== "0x38" && cid !== "56") {
+    // Aday sağlayıcılar: BSC'de (56) olan ilkini seç
+    const cands = [W, window.ethereum, window.trustwallet?.ethereum, window.trustwallet, ...eip6963.map(d => d.provider)]
+      .filter((p, i, arr) => p && typeof p.request === "function" && arr.indexOf(p) === i);
+    const toId = v => { try { return Number(BigInt(v)); } catch { return Number(v); } };
+    let pick = null, accs = [], seen = [], lastErr = null;
+    for (const p of cands) {
+      try {
+        let a = [];
+        try { a = await withTimeout(p.request({ method: "eth_requestAccounts" }), 30000, "Cüzdan 30 saniyede cevap vermedi"); }
+        catch (e) { if (e.code === 4001) throw new Error("Bağlantı isteğini reddettiniz"); a = await p.request({ method: "eth_accounts" }).catch(() => []); }
+        let cid = null; try { cid = toId(await p.request({ method: "eth_chainId" })); } catch (e) { cid = toId(p.chainId ?? p.networkVersion); }
+        seen.push(cid);
+        if (a && a.length && cid === 56) { pick = p; accs = a; break; }
+        if (a && a.length && !pick) { pick = p; accs = a; }
+      } catch (e) { if (/reddettiniz/.test(e.message)) throw e; lastErr = e; }
+    }
+    $("wDiag").textContent += ` · ağlar: ${seen.join(",") || "-"}`;
+    if (!pick) throw lastErr || new Error("Cüzdan hesap vermedi. Trust'ta Smart Chain cüzdanını seçip tekrar deneyin");
+    W = pick;
+    let cid = toId(await W.request({ method: "eth_chainId" }).catch(() => W.chainId));
+    if (cid !== 56) {
       try { await W.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] }); }
       catch (e) {
-        if (e.code === 4902 || /unrecognized|not added|unknown chain/i.test(e.message || "")) {
-          await W.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x38", chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 }, rpcUrls: [PUBLIC_RPC], blockExplorerUrls: ["https://bscscan.com"] }] });
-        } else throw new Error("Ağ BNB Smart Chain'e geçirilemedi. Trust'ta sayfanın üstündeki ağ simgesinden 'Smart Chain' seçin");
+        try { await W.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x38", chainName: "BNB Smart Chain", nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 }, rpcUrls: [PUBLIC_RPC], blockExplorerUrls: ["https://bscscan.com"] }] }); }
+        catch (e2) { throw new Error(`Cüzdan şu an başka ağda (${cid}). Trust'ta sayfanın üstündeki ağ simgesine basıp "BNB Smart Chain" seçin, sonra Yenile`); }
       }
     }
     browserProv = new ethers.BrowserProvider(W, "any");
-    const net = await browserProv.getNetwork();
-    if (net.chainId !== 56n) throw new Error("Cüzdan hâlâ başka ağda (chainId " + net.chainId + "). Trust'ta ağ olarak Smart Chain seçin");
-    signer = await browserProv.getSigner(accs[0]);
+    let net = null; try { net = await browserProv.getNetwork(); } catch (e) { $("wDiag").textContent += " · getNetwork: " + (e.shortMessage || e.message); }
+    if (net && net.chainId !== 56n) throw new Error("Cüzdan hâlâ başka ağda (" + net.chainId + "). Trust'ta ağ olarak BNB Smart Chain seçin");
+    signer = new ethers.JsonRpcSigner(browserProv, ethers.getAddress(accs[0]));
     account = await signer.getAddress();
     $("netPill").textContent = "BSC bağlı";
     $("connectBtn").textContent = "Bağlı ✓";
