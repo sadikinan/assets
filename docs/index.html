@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1>BNB Trend <span class="pill" id="netPill">bağlı değil</span></h1>
+<h1>BNB Trend <small style="font-size:12px;opacity:.6">v5.2</small> <span class="pill" id="netPill">bağlı değil</span></h1>
 
 <div class="card" id="sigCard">
   <h2>Bugünkü öneri</h2>
@@ -62,6 +62,7 @@
   <div class="row"><span>USDT</span><span id="wUsdt">-</span></div>
   <div class="row"><span>WBNB</span><span id="wWbnb">-</span></div>
   <button class="primary" id="connectBtn">Cüzdanı bağla</button>
+  <div id="wDiag" class="mut" style="font-size:12px;margin-top:6px"></div>
 </div>
 
 <div class="card">
@@ -303,9 +304,18 @@ async function waitWallet(ms = 3000) {
 }
 function trustLink() { return "https://link.trustwallet.com/open_url?coin_id=20000714&url=" + encodeURIComponent(location.href); }
 let W = null;
+function diag() {
+  const e = window.ethereum, t = window.trustwallet;
+  const f = x => x ? "var" : "yok";
+  $("wDiag").textContent = `Tanı: ethereum ${f(e)}${e?.isTrust || e?.isTrustWallet ? " (Trust)" : e?.isMetaMask ? " (MetaMask)" : ""} · trustwallet ${f(t)} · 6963 ${eip6963.length} · ${/Trust/i.test(navigator.userAgent) ? "Trust tarayıcı" : "tarayıcı: " + (navigator.userAgent.match(/(CriOS|FxiOS|Safari|Chrome)/) || ["?"])[0]}`;
+}
+function withTimeout(p, ms, msg) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]); }
 async function connect() {
+  $("connectBtn").textContent = "Cüzdan aranıyor…";
   W = await waitWallet();
+  diag();
   if (!W) {
+    $("connectBtn").textContent = "Cüzdanı bağla";
     $("walletInfo").innerHTML = `Bu tarayıcıda cüzdan yok (Safari/Chrome olabilir). <a href="${trustLink()}" style="color:#4da3ff;font-weight:700">Trust Wallet içinde aç</a> bağlantısına basın, ya da Trust → Keşfet → adres çubuğuna bu sayfanın adresini yazın.`;
     log("Cüzdan bulunamadı (sayfa cüzdan tarayıcısında değil)");
     return;
@@ -313,7 +323,7 @@ async function connect() {
   try {
     $("connectBtn").textContent = "Cüzdan onayı bekleniyor…";
     let accs = [];
-    try { accs = await W.request({ method: "eth_requestAccounts" }); }
+    try { accs = await withTimeout(W.request({ method: "eth_requestAccounts" }), 30000, "Cüzdan 30 saniyede cevap vermedi. Trust'ta sağ üstteki ağ simgesinden Smart Chain seçip sayfayı yenileyin"); }
     catch (e) { if (e.code === 4001) throw new Error("Bağlantı isteğini reddettiniz"); accs = await W.request({ method: "eth_accounts" }); }
     if (!accs || !accs.length) throw new Error("Cüzdan hesap vermedi. Trust'ta sağ üstten BNB Smart Chain cüzdanını seçip tekrar deneyin");
     let cid = String(await W.request({ method: "eth_chainId" }));
@@ -675,7 +685,7 @@ async function doSell() {
 $("connectBtn").onclick = connect;
 $("refreshBtn").onclick = refresh;
 refresh();
-waitWallet(2000).then(w => { if (w && (w.selectedAddress || w.address)) connect(); else if (!w) $("walletInfo").innerHTML = `Cüzdan algılanmadı. Safari/Chrome'daysanız <a href="${trustLink()}" style="color:#4da3ff;font-weight:700">Trust Wallet içinde aç</a>.`; });
+waitWallet(2000).then(w => { diag(); if (w && (w.selectedAddress || w.address)) connect(); else if (!w) $("walletInfo").innerHTML = `Cüzdan algılanmadı. Safari/Chrome'daysanız <a href="${trustLink()}" style="color:#4da3ff;font-weight:700">Trust Wallet içinde aç</a>.`; });
 setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 5 * 60 * 1000);
 </script>
 </body>
